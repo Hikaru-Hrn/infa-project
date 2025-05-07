@@ -231,6 +231,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Не удалось добавить товар в корзину: {str(e)}")
 
     def add_to_store(self):
+        def add_product_to_store(product_name, quantity):
+            cursor.execute('UPDATE products SET quantity = quantity + ? WHERE name = ?',
+                           (quantity, product_name))
+
         try:
             product_name = self.product_combo.currentText()
             quantity_text = self.quantity_input.text()
