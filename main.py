@@ -2,7 +2,7 @@ import sys
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QComboBox, QLineEdit, QPushButton, QScrollArea,
-    QMessageBox, QDialog, QCompleter
+    QMessageBox, QDialog, QCompleter, QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QMessageBox
 )
 
 import re
@@ -442,14 +442,22 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть окно добавления товара(ов): {str(e)}")
 
     def checkout(self):
+        dlg = CustomerDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return  # покупка отменена
+        # все поля валидны
+        customer_id = add_customer_and_get_id(
+            full_name=dlg.name_input.text().strip(),
+            age=int(dlg.age_input.text()),
+            phone=dlg.phone_input.text().strip(),
+            passport_plain=dlg.passport_input.text().strip().replace(" ", "")
+        )
         try:
-            sale_items = [(item[0], item[2], item[3]) for item in self.cart]
-
-            create_sale(sale_items)
+            create_sale([(item[0], item[2], item[3]) for item in self.cart], customer_id=customer_id)
             self.cart = []
             QMessageBox.information(self, "Успех", "Продажа оформлена успешно")
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось оформить продажу: {str(e)}")
+            QMessageBox.critical(self, "Ошибка", f"Не удалось оформить продажу: {e}")
 
     def show_history(self):
         try:
@@ -592,6 +600,57 @@ class LoginDialog(QDialog):
     def open_register(self):
         dlg = RegisterDialog(self)
         dlg.exec()
+
+class CustomerDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Данные покупателя")
+        self.setFixedSize(300, 250)
+
+        form = QFormLayout(self)
+
+        self.name_input = QLineEdit(); form.addRow("ФИО:", self.name_input)
+        self.age_input = QLineEdit();
+        self.age_input.setValidator(QtGui.QIntValidator(18, 120))
+        form.addRow("Возраст:", self.age_input)
+        self.phone_input = QLineEdit(); form.addRow("Телефон:", self.phone_input)
+        self.passport_input = QLineEdit(); form.addRow("Паспорт (серия и номер):", self.passport_input)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(self.validate_and_accept)
+        btns.rejected.connect(self.reject)
+        form.addRow(btns)
+
+    def validate_and_accept(self):
+        # ФИО: 3 слова
+        if not re.fullmatch(r'[А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+', self.name_input.text().strip()):
+            QMessageBox.warning(self, "Ошибка", "ФИО: три слова, каждое с заглавной буквы")
+            return
+
+        # Возраст: число и не менее 18
+        age_text = self.age_input.text().strip()
+        try:
+            age = int(age_text)
+            if age < 18:
+                raise ValueError()
+        except ValueError:
+            QMessageBox.warning(self, "Ошибка", "Возраст должен быть числом и не менее 18 лет")
+            return
+
+        # Телефон
+        if not re.fullmatch(r'(8\d{10}|\+7\d{10})', self.phone_input.text().strip()):
+            QMessageBox.warning(self, "Ошибка", "Телефон: формат 8XXXXXXXXXX или +7XXXXXXXXXX")
+            return
+
+        # Паспорт: две буквы + 6 цифр или 4 цифры + 6 цифр
+        if not re.fullmatch(r'([А-ЯЁ]{2}\d{6}|\d{4}\s?\d{6})', self.passport_input.text().strip()):
+            QMessageBox.warning(self, "Ошибка", "Паспорт: серия и номер в формате XX123456 или 1234 123456")
+            return
+
+        # Всё ок, принимаем
+        self.accept()
 
 if __name__ == "__main__":
     try:

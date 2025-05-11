@@ -1,6 +1,14 @@
 import sqlite3
 from datetime import datetime
+from cryptography.fernet import Fernet
 import hashlib, os
+
+KEY_PATH = "secret.key"
+if not os.path.exists(KEY_PATH):
+    raise RuntimeError("Ключ шифрования не найден! Запустите generate_key.py")
+with open(KEY_PATH, "rb") as f:
+    F = Fernet(f.read())
+
 
 connection = sqlite3.connect("DB_shop_sells.db")
 cursor = connection.cursor()
@@ -101,6 +109,20 @@ def create_tables():
             salt TEXT NOT NULL
         );"""
     )
+    cursor.execute("""
+            CREATE TABLE IF NOT EXISTS customers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                full_name TEXT NOT NULL,
+                age INTEGER NOT NULL,
+                phone TEXT NOT NULL,
+                passport_encrypted BLOB NOT NULL
+            );
+        """)
+    # добавляем поле customer_id в sales, если его ещё нет
+    cursor.execute("PRAGMA table_info(sales);")
+    cols = [col[1] for col in cursor.fetchall()]
+    if "customer_id" not in cols:
+        cursor.execute("ALTER TABLE sales ADD COLUMN customer_id INTEGER REFERENCES customers(id);")
     connection.commit()
 
 
@@ -246,3 +268,32 @@ def verify_seller(username: str, password: str) -> bool:
     stored_hash, salt_hex = row
     calc_hash, _ = hash_password(password, bytes.fromhex(salt_hex))
     return calc_hash == stored_hash
+
+def add_customer_and_get_id(full_name: str, age: int, phone: str, passport_plain: str) -> int:
+    """
+    Шифрует паспорт и сохраняет данные клиента, возвращает его ID.
+    """
+    passport_enc = F.encrypt(passport_plain.encode())
+    cursor.execute(
+        "INSERT INTO customers (full_name, age, phone, passport_encrypted) VALUES (?, ?, ?, ?)",
+        (full_name, age, phone, passport_enc)
+    )
+    connection.commit()
+    return cursor.lastrowid
+
+# Модифицируем create_sale, чтобы принимать customer_id
+def create_sale(sale_items, customer_id=None):
+    sale_date = datetime.now().strftime('%Y-%m-%d')
+    total_amount = sum(item[2] * item[1] for item in sale_items)
+    cursor.execute(
+        'INSERT INTO sales(sale_date, total_amount, customer_id) VALUES (?, ?, ?)',
+        (sale_date, total_amount, customer_id)
+    )
+    sale_id = cursor.lastrowid
+    for prod_id, price, quantity in sale_items:
+        cursor.execute(
+            'INSERT INTO sale_items(sale_id, product_id, quantity, price) VALUES (?, ?, ?, ?)',
+            (sale_id, prod_id, quantity, price)
+        )
+        cursor.execute('UPDATE products SET quantity = quantity - ? WHERE id = ?', (quantity, prod_id))
+    connection.commit()
