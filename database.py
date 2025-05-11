@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import datetime
+import hashlib, os
 
 connection = sqlite3.connect("DB_shop_sells.db")
 cursor = connection.cursor()
@@ -34,6 +35,7 @@ PRODUCTS = [
     (17, 6, "Снайперская Mauser 98k", 15678, 4)
 ]
 
+
 def create_tables():
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS categories (
@@ -53,7 +55,7 @@ def create_tables():
     )
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS sales (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id INTEGER PRIMARY KEY,
             sale_date TEXT NOT NULL,
             total_amount REAL NOT NULL
         );"""
@@ -69,6 +71,38 @@ def create_tables():
             FOREIGN KEY (product_id) REFERENCES products (id)
         );"""
     )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS addings (
+                id INTEGER PRIMARY KEY,
+                adding_date TEXT NOT NULL,
+                total_amount REAL NOT NULL
+        );"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS add_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            adding_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            quantity INTEGER NOT NULL,
+            price REAL NOT NULL,
+            FOREIGN KEY (adding_id) REFERENCES addings (id),
+            FOREIGN KEY (product_id) REFERENCES products (id)
+        );
+        """
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS sellers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL,
+            age INTEGER NOT NULL,
+            phone TEXT NOT NULL,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL
+        );"""
+    )
+    connection.commit()
+
 
 def add_categories(categories):
 
@@ -81,9 +115,17 @@ def add_products(products):
                       "(id, category_id, name, price, quantity) VALUES (?, ?, ?, ?, ?)", products)
     connection.commit()
 
+def add_product(new_prod_id, new_prod_categ_id, product_name, price, quantity):
+    cursor.execute("INSERT INTO products(id, category_id, name, price, quantity) VALUES(?,?,?,?,?)",
+                   (new_prod_id, new_prod_categ_id, product_name, price, quantity))
+
 def get_product_info(product_id):
     cursor.execute("SELECT * FROM products WHERE id = ?", (product_id,))
     return cursor.fetchone()
+
+def get_names(tablename):
+    res = cursor.execute(f"SELECT name FROM {tablename}")
+    return [i[0] for i in res]
 
 def get_products_by_category(category):
     cursor.execute("SELECT p.name FROM products p JOIN categories c ON c.id = p.category_id WHERE c.name = ?",
@@ -105,6 +147,10 @@ def get_quantity_by_id(product_id):
     aq = cursor.fetchone()[0]
     return aq
 
+def get_categ_id_by_name(categ_name):
+    res = cursor.execute("SELECT id FROM categories WHERE name = ?", (categ_name,)).fetchone()[0]
+    return res
+
 def get_id_price_by_name(prod_name):
     cursor.execute("SELECT id, price FROM products WHERE name = ?", (prod_name,))
     return cursor.fetchone()
@@ -119,6 +165,11 @@ def get_sale_items_by_sale_id(sale_id):
     return cursor.fetchall()
 
 
+def update_add_items(sale_id, product_id, quantity, price):
+    cursor.execute('INSERT INTO add_items(adding_id, product_id, quantity, price) VALUES(?,?,?,?)',
+                   (sale_id, product_id, quantity, price))
+
+
 def create_sale(sale_items):
     sale_date = datetime.now().strftime('%Y-%m-%d')
     total_amount = sum(item[2] * item[1] for item in sale_items)
@@ -129,8 +180,69 @@ def create_sale(sale_items):
         product_id = item[0]
         price = item[1]
         quantity = item[2]
-    cursor.execute('INSERT INTO sale_items(sale_id, product_id, quantity, price) VALUES(?,?,?,?)',
+        cursor.execute('INSERT INTO sale_items(sale_id, product_id, quantity, price) VALUES(?,?,?,?)',
                       (sale_id, product_id, quantity, price))
-    cursor.execute('UPDATE products SET quantity = quantity - ? WHERE id = ?',
+        cursor.execute('UPDATE products SET quantity = quantity - ? WHERE id = ?',
                       (quantity, product_id))
     connection.commit()
+
+def add_products_to_store(add_items):
+    adding_date = datetime.now().strftime('%Y-%m-%d')
+    prod_names = get_names("products")
+    categ_names = get_names("categories")
+    total_amount = sum(item[2] * item[3] for item in add_items)
+
+    cursor.execute('INSERT INTO addings(adding_date, total_amount) VALUES(?,?)',
+                   (adding_date, total_amount))
+    sale_id = cursor.lastrowid
+
+    for item in add_items:
+        product_name = item[0]
+        product_category = item[1]
+        price = item[2]
+        quantity = item[3]
+
+        if product_name.lower() not in prod_names:
+            print("here")
+            new_prod_id = cursor.execute("SELECT MAX(id) FROM products").fetchone()[0] + 1
+            if product_category.lower() in categ_names:
+                new_prod_categ_id = get_categ_id_by_name(product_category)
+            else:
+                new_prod_categ_id = cursor.execute("SELECT MAX(id) FROM categories").fetchone()[0] + 1
+                cursor.execute("INSERT INTO categories(id, name) VALUES(?,?)",
+                               (new_prod_categ_id, product_category))
+
+            add_product(new_prod_id, new_prod_categ_id, product_name, price, quantity)
+            update_add_items(sale_id, new_prod_id, quantity, price)
+        else:
+            product_id = cursor.execute("SELECT id FROM products WHERE name = ?",
+                                        (product_name,)).fetchone()[0]
+            update_add_items(sale_id, product_id, quantity, price)
+            cursor.execute('UPDATE products SET quantity = quantity + ? WHERE id = ?',
+                           (quantity, product_id))
+
+    connection.commit()
+
+def hash_password(password: str, salt: bytes = None):
+    if salt is None:
+        salt = os.urandom(16)
+    pwd_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100_000)
+    return pwd_hash.hex(), salt.hex()
+
+def register_seller(full_name: str, age: int, phone: str, username: str, password: str):
+    pwd_hash, salt = hash_password(password)
+    cursor.execute(
+        "INSERT INTO sellers (full_name, age, phone, username, password_hash, salt) VALUES (?, ?, ?, ?, ?, ?)",
+        (full_name, age, phone, username, pwd_hash, salt)
+    )
+    connection.commit()
+
+def verify_seller(username: str, password: str) -> bool:
+    row = cursor.execute(
+        "SELECT password_hash, salt FROM sellers WHERE username = ?", (username,)
+    ).fetchone()
+    if not row:
+        return False
+    stored_hash, salt_hex = row
+    calc_hash, _ = hash_password(password, bytes.fromhex(salt_hex))
+    return calc_hash == stored_hash
