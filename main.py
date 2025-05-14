@@ -368,9 +368,9 @@ class HistoryDialog(QDialog):
                 return
 
             for sale in sales:
-                sale_id, sale_date, total_amount, customer = sale
+                sale_id, sale_date, total_amount, customer, seller = sale
 
-                sale_label = QLabel(f"Покупка #{sale_id} от {sale_date} - Итого: {total_amount} руб. Покупатель: {customer}")
+                sale_label = QLabel(f"Покупка #{sale_id} от {sale_date} - Итого: {total_amount} руб. Покупатель: {customer}. Продавец: {seller}")
                 self.scroll_layout.addWidget(sale_label)
 
                 self.scroll_layout.addWidget(QLabel("─" * 50))
@@ -379,24 +379,23 @@ class HistoryDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, seller_login=None):
         super().__init__()
-        self.setWindowTitle("Магазин оружия)")
+        self.s_id = get_seller_id(seller_login)
+        self.setWindowTitle("Магазин оружия")
         self.setFixedSize(500, 400)
-
         try:
             create_tables()
             add_categories(CATEGORIES)
             add_products(PRODUCTS)
+            # Initialize balance for the seller if not exists
+            update_balance(self.s_id, 0.0)  # Set initial balance to 0.0
         except Exception as e:
             QMessageBox.critical(self, "Ошибка базы данных", f"Не удалось инициализировать БД: {str(e)}")
             sys.exit(1)
-
         self.cart = []
-
         self.main_widget = QWidget()
         self.setCentralWidget(self.main_widget)
-
         self.init_main_ui()
 
     def init_main_ui(self):
@@ -456,7 +455,7 @@ class MainWindow(QMainWindow):
         self.costs_value = QLabel()
         self.costs_value.setText(str(select_costs()))
         self.balance_value = QLabel()
-        self.balance_value.setText(str(select_balance()))
+        self.balance_value.setText(str(select_balance(self.s_id)))
         income_label = QLabel("Получено:")
         income_layout.addWidget(income_label)
         income_layout.addWidget(self.income_value)
@@ -482,7 +481,7 @@ class MainWindow(QMainWindow):
             self.update_products_combo()
             self.income_value.setText(str(select_income()))  # Сумма всех продаж
             self.costs_value.setText(str(select_costs()))  # Сумма всех закупок
-            self.balance_value.setText(str(select_balance()))  # Обновленный баланс
+            self.balance_value.setText(str(select_balance(self.s_id)))  # Обновленный баланс
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", f"Не удалось обновить данные: {str(e)}")
 
@@ -562,7 +561,12 @@ class MainWindow(QMainWindow):
             passport_plain=dlg.passport_input.text().strip().replace(" ", "")
         )
         try:
-            create_sale([(item[0], item[2], item[3]) for item in self.cart], customer_id=customer_id)
+            create_sale([(item[0], item[2], item[3]) for item in self.cart], customer_id=customer_id,
+                        seller_id=self.s_id)
+            total_amount = sum(item[2] * item[3] for item in self.cart)  # Calculate total sale amount
+            current_balance = select_balance(self.s_id)
+            new_balance = current_balance + total_amount  # Update balance
+            update_balance(self.s_id, new_balance)  # Update balance in the database
             self.cart = []
             QMessageBox.information(self, "Успех", "Продажа оформлена успешно")
         except Exception as e:
@@ -672,6 +676,9 @@ class LoginDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Вход продавца")
         self.setFixedSize(300, 200)
+
+        self.seller_login = ""
+
         layout = QVBoxLayout()
 
         self.login_input = QLineEdit()
@@ -701,6 +708,7 @@ class LoginDialog(QDialog):
         password = self.password_input.text()
         if verify_seller(username, password):
             QMessageBox.information(self, "Успех", "Вход выполнен")
+            self.seller_login = username
             self.accept()
         else:
             QMessageBox.warning(self, "Ошибка", "Неверный логин или пароль")
@@ -776,7 +784,7 @@ if __name__ == "__main__":
             sys.exit(0)
 
         # После успешного входа – главное окно
-        window = MainWindow()
+        window = MainWindow(login.seller_login)
         window.show()
         sys.exit(app.exec())
     except Exception as e:

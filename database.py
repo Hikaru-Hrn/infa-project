@@ -29,7 +29,7 @@ PRODUCTS = [
     (5, 2, "m1 garand", 16999, 23),
     (6, 2, "gewehr 43", 14799, 15),
     (7, 3, "ппш-41", 9879, 98),
-    (8, 3, "m1928A1 thompson", 10199, 82),
+    (8, 3, "m1928a1 thompson", 10199, 82),
     (9, 3, "mp-40", 9543, 51),
     (10, 4, "тт", 5201, 235),
     (11, 4, "mauser c96", 5023, 198),
@@ -43,14 +43,7 @@ PRODUCTS = [
 
 
 def create_tables():
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS balance_table(
-            balance INTEGER NOT NULL
-        );"""
-    )
-    cursor.execute(
-        """INSERT INTO balance_table(balance) VALUES(1000000)"""
-    )
+
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS categories (
             id INTEGER PRIMARY KEY NOT NULL UNIQUE,
@@ -71,7 +64,9 @@ def create_tables():
         """CREATE TABLE IF NOT EXISTS sales (
             id INTEGER PRIMARY KEY,
             sale_date TEXT NOT NULL,
-            total_amount REAL NOT NULL
+            total_amount REAL NOT NULL,
+            seller_id INTEGER NOT NULL,
+            FOREIGN KEY (seller_id) REFERENCES sellers (id)
         );"""
     )
     cursor.execute(
@@ -115,6 +110,16 @@ def create_tables():
             salt TEXT NOT NULL
         );"""
     )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS balance_table (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            seller_id INTEGER NOT NULL UNIQUE,
+            balance REAL NOT NULL DEFAULT 0.0,
+            last_updated TEXT NOT NULL,
+            FOREIGN KEY (seller_id) REFERENCES sellers (id) ON DELETE CASCADE
+        );"""
+    )
+    connection.commit()
     cursor.execute("""
             CREATE TABLE IF NOT EXISTS customers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,12 +152,15 @@ def select_costs():
                          (datetime.now().strftime('%Y-%m-%d'),)).fetchone()[0]
     return res if res else 0  # Возвращает сумму всех закупок за день
 
-def select_balance():
-    i = select_income()
-    c = select_costs()
-    cursor.execute("UPDATE balance_table SET balance = ?", (i - c,))  # Полная перезапись баланса
+def select_balance(seller_id):
+    cursor.execute("SELECT balance FROM balance_table WHERE seller_id = ?", (seller_id,))
+    balance = cursor.fetchone()
+    return balance[0] if balance else 0.0
+
+def update_balance(seller_id, new_balance):
+    cursor.execute("INSERT OR REPLACE INTO balance_table (seller_id, balance, last_updated) VALUES (?, ?, ?)",
+                   (seller_id, new_balance, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
     connection.commit()
-    return i - c
 
 def add_products(products):
 
@@ -315,13 +323,13 @@ def add_customer_and_get_id(full_name: str, age: int, phone: str, passport_plain
     connection.commit()
     return cursor.lastrowid
 
-def create_sale(sale_items, customer_id=None):
+def create_sale(sale_items, customer_id=None, seller_id=None):
 
     sale_date = datetime.now().strftime('%Y-%m-%d')
     total_amount = sum(item[2] * item[1] for item in sale_items)
     cursor.execute(
-        'INSERT INTO sales(sale_date, total_amount, customer_id) VALUES (?, ?, ?)',
-        (sale_date, total_amount, customer_id)
+        'INSERT INTO sales(sale_date, total_amount, customer_id, seller_id) VALUES (?, ?, ?, ?)',
+        (sale_date, total_amount, customer_id, seller_id)
     )
     sale_id = cursor.lastrowid
     for prod_id, price, quantity in sale_items:
@@ -330,3 +338,11 @@ def create_sale(sale_items, customer_id=None):
             (sale_id, prod_id, quantity, price)
         )
     connection.commit()
+
+def get_seller_id(seller_login):
+    res = cursor.execute("SELECT id FROM sellers WHERE username = ?", (seller_login,)).fetchone()
+    if res:
+        return res[0]
+    else:
+        return None
+
